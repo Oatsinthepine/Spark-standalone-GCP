@@ -1,9 +1,30 @@
-resource "google_compute_instance" "bootstrap_test" {
-  name         = "spark-bootstrap-test"
+locals {
+  spark_nodes = {
+    spark-master = {
+      role        = "master"
+      internal_ip = "10.10.0.10"
+    }
+    spark-worker-1 = {
+      role        = "worker"
+      internal_ip = "10.10.0.11"
+    }
+    spark-worker-2 = {
+      role        = "worker"
+      internal_ip = "10.10.0.12"
+    }
+  }
+
+  spark_master_ip = local.spark_nodes["spark-master"].internal_ip
+}
+
+resource "google_compute_instance" "spark_node" {
+  for_each     = local.spark_nodes
+  name         = each.key
   machine_type = var.machine_type
   zone         = var.zone
 
-  tags = ["spark-node", "spark-master"]
+  //tags = ["spark-node", each.value.role]
+  tags = compact(["spark-node", each.value.role == "master" ? "spark-master" : "spark-worker"])
 
   boot_disk {
     initialize_params {
@@ -15,14 +36,23 @@ resource "google_compute_instance" "bootstrap_test" {
 
   network_interface {
     subnetwork = google_compute_subnetwork.spark_subnet.id
+    network_ip = each.value.internal_ip
     access_config { network_tier = "PREMIUM" }
   }
 
-  metadata = { enable-oslogin = "TRUE", user-data = file("${path.module}/cloud-init/common.yaml") }
+  metadata = { enable-oslogin = "TRUE",
+    user-data = file("${path.module}/cloud-init/common.yaml"),
+    role      = each.value.role,
+    master-ip = local.spark_master_ip
+  }
 
   labels = {
-    project     = var.project_id
+    project     = "spark-standalone-lab"
     environment = "learning"
-    role        = "spark-bootstrap-test"
+    role        = each.value.role
   }
+
+  allow_stopping_for_update = true
 }
+
+

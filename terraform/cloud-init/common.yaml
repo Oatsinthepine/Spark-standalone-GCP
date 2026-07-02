@@ -1,5 +1,5 @@
 #cloud-config
- 
+
 package_update: true
 package_upgrade: false
 
@@ -16,25 +16,132 @@ packages:
   - jq
 
 write_files:
-  - path: /etc/profile.d/spark-lab.sh
+  - path: /etc/profile.d/spark.sh
     owner: root:root
     permissions: "0644"
     content: |
       export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
-      export PATH=$JAVA_HOME/bin:$PATH
+      export SPARK_HOME=/opt/spark
+      export PYSPARK_PYTHON=/usr/bin/python3
+      export PATH=$SPARK_HOME/bin:$SPARK_HOME/sbin:$JAVA_HOME/bin:$PATH
 
-  - path: /etc/spark-lab-node
+  - path: /etc/systemd/system/spark-master.service
     owner: root:root
     permissions: "0644"
     content: |
-      This machine was bootstrapped by cloud-init.
+      [Unit]
+      Description=Apache Spark Standalone Master
+      Wants=network-online.target
+      After=network-online.target
+
+      [Service]
+      Type=simple
+      User=spark
+      Group=spark
+      EnvironmentFile=/etc/spark-node.env
+      WorkingDirectory=/opt/spark
+      ExecStart=/opt/spark/bin/spark-class org.apache.spark.deploy.master.Master --host ${SPARK_NODE_IP} --port 7077 --webui-port 8080
+      Restart=on-failure
+      RestartSec=5
+      SuccessExitStatus=143
+      LimitNOFILE=65536
+
+      [Install]
+      WantedBy=multi-user.target
+
+  - path: /etc/systemd/system/spark-worker.service
+    owner: root:root
+    permissions: "0644"
+    content: |
+      [Unit]
+      Description=Apache Spark Standalone Worker
+      Wants=network-online.target
+      After=network-online.target
+
+      [Service]
+      Type=simple
+      User=spark
+      Group=spark
+      EnvironmentFile=/etc/spark-node.env
+      WorkingDirectory=/opt/spark
+      ExecStart=/opt/spark/bin/spark-class org.apache.spark.deploy.worker.Worker --host ${SPARK_NODE_IP} --port 7078 --webui-port 8081 --cores 2 --memory 2g spark://${SPARK_MASTER_IP}:7077
+      Restart=on-failure
+      RestartSec=5
+      SuccessExitStatus=143
+      LimitNOFILE=65536
+
+      [Install]
+      WantedBy=multi-user.target
 
 runcmd:
-  - python3 --version
-  - java -version
-  - mkdir -p /opt/spark
-  - chmod 0755 /opt/spark
-  - touch /var/log/spark-cloud-init-complete
+  - |
+      set -eux
+
+      SPARK_VERSION="3.5.8"
+      SPARK_PACKAGE="spark-${SPARK_VERSION}-bin-hadoop3"
+      SPARK_ARCHIVE="${SPARK_PACKAGE}.tgz"
+      SPARK_URL="https://downloads.apache.org/spark/spark-${SPARK_VERSION}/${SPARK_ARCHIVE}"
+      METADATA_URL="http://metadata.google.internal/computeMetadata/v1/instance"
+      METADATA_HEADER="Metadata-Flavor: Google"
+
+      NODE_ROLE="$(curl -fsS -H "${METADATA_HEADER}" "${METADATA_URL}/attributes/role")"
+      MASTER_IP="$(curl -fsS -H "${METADATA_HEADER}" "${METADATA_URL}/attributes/master-ip")"
+      NODE_IP="$(curl -fsS -H "${METADATA_HEADER}" "${METADATA_URL}/network-interfaces/0/ip")"
+
+      id -u spark >/dev/null 2>&1 || useradd --system --create-home --home-dir /home/spark --shell /bin/bash spark
+
+      curl --fail --location --retry 5 --retry-delay 3 "${SPARK_URL}" --output "/tmp/${SPARK_ARCHIVE}"
+      tar -xzf "/tmp/${SPARK_ARCHIVE}" -C /opt
+      ln -sfn "/opt/${SPARK_PACKAGE}" /opt/spark
+      rm -f "/tmp/${SPARK_ARCHIVE}"
+
+      install -d -o spark -g spark -m 0755 /var/log/spark /var/lib/spark /var/lib/spark/work /tmp/spark-events
+    
+      chown -R spark:spark "/opt/${SPARK_PACKAGE}"
+
+      cat > /opt/spark/conf/spark-env.sh <<EOF
+      export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
+      export PYSPARK_PYTHON=/usr/bin/python3
+      export SPARK_LOCAL_IP=${NODE_IP}
+      export SPARK_LOG_DIR=/var/log/spark
+      export SPARK_WORKER_DIR=/var/lib/spark/work
+      export SPARK_DAEMON_MEMORY=1g
+      EOF
+
+      cat > /opt/spark/conf/spark-defaults.conf <<EOF
+      spark.master                     spark://${MASTER_IP}:7077
+      spark.eventLog.enabled           true
+      spark.eventLog.dir               file:///tmp/spark-events
+      spark.history.fs.logDirectory    file:///tmp/spark-events
+      EOF
+
+      cat > /etc/spark-node.env <<EOF
+      JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
+      SPARK_HOME=/opt/spark
+      PYSPARK_PYTHON=/usr/bin/python3
+      SPARK_NODE_ROLE=${NODE_ROLE}
+      SPARK_NODE_IP=${NODE_IP}
+      SPARK_MASTER_IP=${MASTER_IP}
+      EOF
+
+      chown spark:spark /opt/spark/conf/spark-env.sh /opt/spark/conf/spark-defaults.conf
+      chmod 0644 /etc/spark-node.env
+      chmod 0755 /opt/spark/conf/spark-env.sh
+
+      systemctl daemon-reload
+
+      if [ "${NODE_ROLE}" = "master" ]; then
+        systemctl disable --now spark-worker.service || true
+        systemctl enable --now spark-master.service
+      elif [ "${NODE_ROLE}" = "worker" ]; then
+        systemctl disable --now spark-master.service || true
+        systemctl enable --now spark-worker.service
+      else
+        echo "Unsupported Spark node role: ${NODE_ROLE}" >&2
+        exit 1
+      fi
+
+      touch /var/log/spark-cloud-init-complete
 
 final_message: |
-  Spark node base bootstrap completed after $UPTIME seconds.
+  Spark node bootstrap completed after $UPTIME seconds.
