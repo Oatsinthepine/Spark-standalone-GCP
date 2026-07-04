@@ -95,7 +95,8 @@ runcmd:
       ln -sfn "/opt/${SPARK_PACKAGE}" /opt/spark
       rm -f "/tmp/${SPARK_ARCHIVE}"
 
-      install -d -o spark -g spark -m 0755 /var/log/spark /var/lib/spark /var/lib/spark/work /tmp/spark-events
+      install -d -o spark -g spark -m 0755 /var/log/spark /var/lib/spark /var/lib/spark/work
+      install -d -o root -g root -m 1777 /var/lib/spark/events
     
       chown -R spark:spark "/opt/${SPARK_PACKAGE}"
 
@@ -111,8 +112,8 @@ runcmd:
       cat > /opt/spark/conf/spark-defaults.conf <<EOF
       spark.master                     spark://${MASTER_IP}:7077
       spark.eventLog.enabled           true
-      spark.eventLog.dir               file:///tmp/spark-events
-      spark.history.fs.logDirectory    file:///tmp/spark-events
+      spark.eventLog.dir               file:///var/lib/spark-events
+      spark.history.fs.logDirectory    file:///var/lib/spark-events
       EOF
 
       cat > /etc/spark-node.env <<EOF
