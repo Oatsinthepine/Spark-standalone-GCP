@@ -22,7 +22,8 @@ write_files:
     content: |
       export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
       export SPARK_HOME=/opt/spark
-      export PYSPARK_PYTHON=/usr/bin/python3
+      export PYSPARK_PYTHON=/opt/spark-venv/bin/python
+      export PYSPARK_DRIVER_PYTHON=/opt/spark-venv/bin/python
       export PATH=$SPARK_HOME/bin:$SPARK_HOME/sbin:$JAVA_HOME/bin:$PATH
 
   - path: /etc/systemd/system/spark-master.service
@@ -90,19 +91,29 @@ runcmd:
 
       id -u spark >/dev/null 2>&1 || useradd --system --create-home --home-dir /home/spark --shell /bin/bash spark
 
+      python3 -m venv /opt/spark-venv
+      /opt/spark-venv/bin/python -m pip install --upgrade pip setuptools wheel
+      /opt/spark-venv/bin/python -m pip install \
+        "pyspark==${SPARK_VERSION}" \
+        numpy \
+        pandas \
+        pyarrow
+      chown -R spark:spark /opt/spark-venv
+
       curl --fail --location --retry 5 --retry-delay 3 "${SPARK_URL}" --output "/tmp/${SPARK_ARCHIVE}"
       tar -xzf "/tmp/${SPARK_ARCHIVE}" -C /opt
       ln -sfn "/opt/${SPARK_PACKAGE}" /opt/spark
       rm -f "/tmp/${SPARK_ARCHIVE}"
 
       install -d -o spark -g spark -m 0755 /var/log/spark /var/lib/spark /var/lib/spark/work
-      install -d -o root -g root -m 1777 /var/lib/spark/events
+      install -d -o root -g root -m 1777 /var/lib/spark-events
     
       chown -R spark:spark "/opt/${SPARK_PACKAGE}"
 
       cat > /opt/spark/conf/spark-env.sh <<EOF
       export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
-      export PYSPARK_PYTHON=/usr/bin/python3
+      export PYSPARK_PYTHON=/opt/spark-venv/bin/python
+      export PYSPARK_DRIVER_PYTHON=/opt/spark-venv/bin/python
       export SPARK_LOCAL_IP=${NODE_IP}
       export SPARK_LOG_DIR=/var/log/spark
       export SPARK_WORKER_DIR=/var/lib/spark/work
@@ -119,7 +130,8 @@ runcmd:
       cat > /etc/spark-node.env <<EOF
       JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
       SPARK_HOME=/opt/spark
-      PYSPARK_PYTHON=/usr/bin/python3
+      PYSPARK_PYTHON=/opt/spark-venv/bin/python
+      PYSPARK_DRIVER_PYTHON=/opt/spark-venv/bin/python
       SPARK_NODE_ROLE=${NODE_ROLE}
       SPARK_NODE_IP=${NODE_IP}
       SPARK_MASTER_IP=${MASTER_IP}

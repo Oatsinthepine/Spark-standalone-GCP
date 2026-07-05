@@ -17,6 +17,13 @@ locals {
   spark_master_ip = local.spark_nodes["spark-master"].internal_ip
 }
 
+resource "google_compute_address" "spark_external_ip" {
+  for_each = local.spark_nodes
+
+  name   = "${each.key}-external-ip"
+  region = var.region
+}
+
 resource "google_compute_instance" "spark_node" {
   for_each     = local.spark_nodes
   name         = each.key
@@ -37,7 +44,10 @@ resource "google_compute_instance" "spark_node" {
   network_interface {
     subnetwork = google_compute_subnetwork.spark_subnet.id
     network_ip = each.value.internal_ip
-    access_config { network_tier = "PREMIUM" }
+    access_config {
+      nat_ip       = google_compute_address.spark_external_ip[each.key].address
+      network_tier = "PREMIUM"
+    }
   }
 
   metadata = { enable-oslogin = "TRUE",
@@ -54,5 +64,3 @@ resource "google_compute_instance" "spark_node" {
 
   allow_stopping_for_update = true
 }
-
-
