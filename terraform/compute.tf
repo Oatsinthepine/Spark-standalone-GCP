@@ -56,6 +56,11 @@ resource "google_compute_instance" "spark_node" {
     master-ip = local.spark_master_ip
   }
 
+  service_account {
+    scopes = ["cloud-platform"]
+    email  = google_service_account.spark_cluster.email
+  }
+
   labels = {
     project     = "spark-standalone-lab"
     environment = "learning"
@@ -64,3 +69,4 @@ resource "google_compute_instance" "spark_node" {
 
   allow_stopping_for_update = true
 }
+
